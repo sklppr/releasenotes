@@ -1,0 +1,137 @@
+#!/usr/bin/env ruby
+
+require "yaml"
+require "net/http"
+require "json"
+require "erb"
+
+# Merge variables from .env file into environment.
+env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
+env.each { |key, value| ENV[key] ||= value }
+
+# Class to encapsulate a specific API.
+class API
+
+  def initialize(server, user, password, base_url="/rest/api/latest/")
+    @server, @user, @password, @base_url = server, user, password, base_url
+  end
+
+  # Request JSON data and return a hash
+  def get(query)
+    uri = URI.join(@server, @base_url, query)
+    request = Net::HTTP::Get.new(uri)
+    request.basic_auth(@user, @password)
+    request["Accept"] = "application/json"
+    http = Net::HTTP.new(uri.hostname, uri.port)
+    response = http.request(request)
+    JSON.parse(response.body)
+  end
+
+end
+
+# Set up Bamboo and JIRA APIs.
+bamboo = API.new(ENV["bamboo_Bamboo_Server"], ENV["bamboo_Bamboo_User"], ENV["bamboo_Bamboo_Password"])
+jira = API.new(ENV["bamboo_JIRA_Server"], ENV["bamboo_JIRA_User"], ENV["bamboo_JIRA_Password"])
+
+# Fetch build result data from Bamboo.
+build_plan = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues")
+
+# Extract project name from first result.
+project_name = build_plan["results"]["result"].first["projectName"]
+
+# Extract issue keys from all issues from all results.
+issue_keys = build_plan["results"]["result"].collect do |result|
+  result["jiraIssues"]["issue"].collect do |issue|
+    issue["key"]
+  end
+end.flatten
+
+# Class to encapsulate a JIRA issue.
+class Issue
+
+  attr_accessor :key, :url, :type, :summary, :description, :status
+  attr_accessor :blocker_keys, :blockers, :is_blocker
+
+  def initialize(data)
+    @key = data["key"]
+    @url = URI.join(ENV["bamboo_JIRA_Server"], "browse/", @key)
+    @type = data["fields"]["issuetype"]["name"]
+    @summary = data["fields"]["summary"]
+    @description = data["fields"]["description"]
+    @status = data["fields"]["status"]["name"].downcase
+    # Select keys of issues with an inward blocking relationship to this one.
+    @blocker_keys = data["fields"]["issuelinks"].select do |link|
+      link["type"]["name"] == "Blocks" && link["inwardIssue"]
+    end.collect do |link|
+      link["inwardIssue"]["key"]
+    end
+    @blockers = []
+    @is_blocker = false
+  end
+
+  # Recursively generates markdown for this issue and its blocking issues.
+  def to_md(level=0)
+    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
+    blockers_md = @blockers.collect { |blocker| blocker.to_md(level+1) }
+    ([issue_md] + blockers_md) * "\n"
+  end
+
+end
+
+# Get JIRA issues based on issue keys from Bamboo, store them in a hash according to their key.
+search_result = jira.get("search?jql=key%20in%20(#{issue_keys.join("%2C")})&maxResults=100&fields=summary,issuetype,status,issuelinks")
+jira_issues = {}
+search_result["issues"].each do |issue_data|
+  issue = Issue.new(issue_data)
+  jira_issues[issue.key] = issue
+end
+
+# Create relationships according to keys of blocking issues.
+jira_issues.each_pair do |key, issue|
+  issue.blocker_keys.each do |blocker|
+    if jira_issues[blocker]
+      issue.blockers << jira_issues[blocker]
+      jira_issues[blocker].is_blocker = true
+    end
+  end
+end
+
+# Get array of all issues, remove blockers (from the top level) and group issues by type.
+grouped_issues = jira_issues.values.reject(&:is_blocker).group_by(&:type)
+
+# Get issue types to display and sort top level sections accordingly.
+issue_types = (ENV["bamboo_Issue_Types"]).split(/,\s?/) rescue ["Epic", "Story", "New Feature", "Improvement", "Bug", "Task", "Subtask"]
+sections = grouped_issues.keys.sort_by { |type| issue_types.index(type) }
+  
+# Get custom release notes.
+release_notes = ENV["bamboo_Release_Notes"]
+
+# Helper to pluralize type names.
+def pluralize(word)
+  case word
+    when /y$/ then word.slice(0, word.length - 1) + "ies"
+    when /(o|x)$/ then word + "es"
+    else word + "s"
+  end
+end
+
+# ERB template for release notes.
+template = <<ERB
+# <%= project_name %>
+
+<%= release_notes %>
+
+<% sections.each do |type| %>
+## <%= pluralize(type) %>
+
+<% grouped_issues[type].each do |issue| %>
+<%= issue.to_md %>
+
+<% end %>
+
+<% end %>
+ERB
+
+# Render release notes to file.
+output = ERB.new(template, nil, "<>").result(binding)
+File.write(ENV["bamboo_Release_Notes_File"] || "releasenotes.md", output)
