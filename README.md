@@ -26,6 +26,7 @@ The generator expects the following environment variables to be set:
 Optionally, the following environment variables can be set:
 
 - `bamboo_Release_Notes` – Custom text to be displayed at top of release notes, default: empty
+- `bamboo_Release_Notes_Mode` – Whether to group issues by sprint (`sprint`) or build number (`build`), default: `sprint`
 - `bamboo_Release_Notes_File` – File name for release notes, default: `releasenotes.md`
 - `bamboo_Issue_Types` – Comma-separated list of issue types to display, default: all issue types are displayed
 

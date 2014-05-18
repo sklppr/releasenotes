@@ -9,6 +9,9 @@ require "erb"
 env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
 env.each { |key, value| ENV[key] ||= value.to_s }
 
+# Determine display mode.
+DISPLAY_MODE = ENV["bamboo_Release_Notes_Mode"].downcase rescue "sprint"
+
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
   def get(query)
@@ -26,21 +29,20 @@ end
 bamboo = API.new(ENV["bamboo_Bamboo_Server"], ENV["bamboo_Bamboo_User"], ENV["bamboo_Bamboo_Password"])
 jira = API.new(ENV["bamboo_JIRA_Server"], ENV["bamboo_JIRA_User"], ENV["bamboo_JIRA_Password"])
 
-# Fetch data of both current build and build plan from Bamboo.
-build_data = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}-#{ENV["bamboo_Build_Number"]}?expand=jiraIssues")
-build_plan_data = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues")
+# Fetch data of both build plan and current build from Bamboo, because build plan doesn't contain current build yet.
+build_plan = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues&max-result=100")
+current_build = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}-#{ENV["bamboo_Build_Number"]}?expand=jiraIssues")
+all_builds = [current_build] + build_plan["results"]["result"]
 
-# Extract project name and issue keys.
-project_name = build_data["projectName"]
-all_build_results = [build_data] + build_plan_data["results"]["result"]
-issue_keys = all_build_results.collect do |result|
-  result["jiraIssues"]["issue"].collect { |issue| issue["key"] }
-end.flatten.uniq
+# Extract project name, build number and issue keys.
+project_name = current_build["projectName"]
+build_number = current_build["planResultKey"]["resultNumber"]
 
 # A JIRA issue.
 class Issue
 
-  attr_accessor :key, :url, :type, :summary, :description, :status, :children, :is_child, :parent, :sprint, :blocker_keys
+  attr_accessor :key, :url, :type, :summary, :description, :status, :sprint, :build_number
+  attr_accessor :parent, :children, :is_child, :blocker_keys
 
   def initialize(data)
     @key = data["key"]
@@ -49,10 +51,11 @@ class Issue
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
     @status = data["fields"]["status"]["name"].downcase
+    @build_number = ""
     @children = []
     @is_child = false
     @parent = data["fields"]["parent"]["key"] if data["fields"]["parent"]
-    # Extract sprint name from custom field.
+    # Extract sprint name by parsing custom field.
     @sprint = begin
       sprint = data["fields"][ENV["bamboo_Sprint_Field"]]
       sprint_data = sprint.first.match(/^.+\[(.+)\]$/)[1]
@@ -71,28 +74,34 @@ class Issue
 
   # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
-    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
+    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (Status: #{@status})"
+    issue_md << " (Build: ##{@build_number})" if DISPLAY_MODE == "sprint"
     children_md = @children.collect { |child| child.to_md(level+1) }
     ([issue_md] + children_md) * "\n"
   end
 
 end
 
-# Fetch JIRA issues based on issue keys from Bamboo and, if given, selected issue types.
-jql_query = "key in (#{issue_keys.join(",")})"
-if ENV["bamboo_Issue_Types"]
-  issue_types = ENV["bamboo_Issue_Types"].split(/,\s?/).map { |type| %Q("#{type}") }
-  jql_query << " AND type in (#{issue_types.join(",")})"
+# If allowed issue types are specified, construct respective query string with quoted types.
+jql_issue_types = if ENV["bamboo_Issue_Types"]
+  allowed_types = ENV["bamboo_Issue_Types"].split(/,\s?/).map { |type| %Q("#{type}") }
+  " AND type in (#{allowed_types.join(",")})"
 end
-search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
-  "&fields=summary,issuetype,status,parent,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
-  "&maxResults=100&validateQuery=false")
 
-# Store issues in a hash according to their key.
+# Fetch JIRA issues for each build. Store all issues in a hash based on their key.
 jira_issues = {}
-search_result["issues"].each do |issue_data|
-  issue = Issue.new(issue_data)
-  jira_issues[issue.key] = issue
+all_builds.each do |build|
+  issue_keys = build["jiraIssues"]["issue"].collect { |issue| issue["key"] }
+  next if issue_keys.empty?
+  jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_types}"
+  search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
+    "&fields=summary,issuetype,status,parent,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
+    "&maxResults=100&validateQuery=false")
+  search_result["issues"].each do |issue_data|
+    issue = Issue.new(issue_data)
+    issue.build_number = build["planResultKey"]["resultNumber"]
+    jira_issues[issue.key] = issue
+  end
 end
 
 # Create relationships according to parent field and blocker keys.
@@ -112,21 +121,25 @@ jira_issues.each do |key, issue|
   end
 end
 
-# Remove child issues from top-level, then group top-level issues by sprint.
-sprints = jira_issues.values.reject(&:is_child).group_by(&:sprint)
+# Remove child issues from top-level, then group top-level issues according to display mode.
+display_issues = jira_issues.values.reject(&:is_child)
+sections = case DISPLAY_MODE
+  when "sprint" then display_issues.group_by(&:sprint)
+  when "build" then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
+end
 
 # Get custom release notes.
 release_notes = ENV["bamboo_Release_Notes"]
 
 # ERB template for release notes.
 template = <<ERB
-# <%= project_name %>
+# <%= project_name %> (Build #<%= build_number %>)
 
 <%= release_notes %>
 
-<% sprints.each_pair do |sprint, issues| %>
+<% sections.each_pair do |section, issues| %>
 
-## <%= sprint %>
+## <%= section %>
 
 <% issues.each do |issue| %>
 <%= issue.to_md %>
