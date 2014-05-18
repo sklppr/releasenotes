@@ -7,7 +7,7 @@ require "erb"
 
 # Merge variables from .env file into environment.
 env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
-env.each { |key, value| ENV[key] ||= value }
+env.each { |key, value| ENV[key] ||= value.to_s }
 
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
@@ -26,18 +26,16 @@ end
 bamboo = API.new(ENV["bamboo_Bamboo_Server"], ENV["bamboo_Bamboo_User"], ENV["bamboo_Bamboo_Password"])
 jira = API.new(ENV["bamboo_JIRA_Server"], ENV["bamboo_JIRA_User"], ENV["bamboo_JIRA_Password"])
 
-# Fetch build result data from Bamboo.
-build_plan = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues")
+# Fetch data of both current build and build plan from Bamboo.
+build_data = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}-#{ENV["bamboo_Build_Number"]}?expand=jiraIssues")
+build_plan_data = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues")
 
-# Extract project name from first result.
-project_name = build_plan["results"]["result"].first["projectName"]
-
-# Extract issue keys from all issues from all results.
-issue_keys = build_plan["results"]["result"].collect do |result|
-  result["jiraIssues"]["issue"].collect do |issue|
-    issue["key"]
-  end
-end.flatten
+# Extract project name and issue keys.
+project_name = build_data["projectName"]
+all_build_results = [build_data] + build_plan_data["results"]["result"]
+issue_keys = all_build_results.collect do |result|
+  result["jiraIssues"]["issue"].collect { |issue| issue["key"] }
+end.flatten.uniq
 
 # A JIRA issue.
 class Issue
@@ -79,12 +77,12 @@ class Issue
 
 end
 
-# Get issues types to display or use all types by default.
-issue_types = ENV["bamboo_Issue_Types"].split(/,\s?/) rescue %w[ Epic Story New\ Feature Improvement Bug Task Subtask ]
-
-# Get JIRA issues based on issue keys from Bamboo and allowed types.
-quoted_issue_types = issue_types.map! { |type| %Q("#{type}") }
-jql_query = "key in (#{issue_keys.join(",")}) AND type in (#{quoted_issue_types.join(",")})"
+# Fetch JIRA issues based on issue keys from Bamboo and, if given, selected issue types.
+jql_query = "key in (#{issue_keys.join(",")})"
+if ENV["bamboo_Issue_Types"]
+  issue_types = ENV["bamboo_Issue_Types"].split(/,\s?/).map { |type| %Q("#{type}") }
+  jql_query << " AND type in (#{issue_types.join(",")})"
+end
 search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
   "&fields=summary,issuetype,status,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
   "&maxResults=100&validateQuery=false")
