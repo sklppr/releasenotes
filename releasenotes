@@ -34,9 +34,10 @@ build_plan = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.
 current_build = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}-#{ENV["bamboo_Build_Number"]}?expand=jiraIssues")
 all_builds = [current_build] + build_plan["results"]["result"]
 
-# Extract project name, build number and issue keys.
-project_name = current_build["projectName"]
-build_number = current_build["planResultKey"]["resultNumber"]
+# Generates URL for a specific build.
+def build_url(build_number)
+  URI.join(ENV["bamboo_Bamboo_Server"], "browse/", "#{ENV["bamboo_Plan_Key"]}-#{build_number}")
+end
 
 # A JIRA issue.
 class Issue
@@ -50,7 +51,7 @@ class Issue
     @type = data["fields"]["issuetype"]["name"]
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
-    @status = data["fields"]["status"]["name"].downcase
+    @status = data["fields"]["status"]["name"]
     @build_number = ""
     @children = []
     @is_child = false
@@ -74,8 +75,8 @@ class Issue
 
   # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
-    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (Status: #{@status})"
-    issue_md << " (Build: ##{@build_number})" if DISPLAY_MODE == "sprint"
+    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
+    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if DISPLAY_MODE == "sprint"
     children_md = @children.collect { |child| child.to_md(level+1) }
     ([issue_md] + children_md) * "\n"
   end
@@ -128,12 +129,15 @@ sections = case DISPLAY_MODE
   when "build" then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
 end
 
-# Get custom release notes.
+# Gather remaining data to display.
+project_name = current_build["projectName"]
+current_build_number = (if ENV["bamboo_Branch_Name"] then "#{ENV["bamboo_Branch_Name"]}-" else "#" end) + ENV["bamboo_Build_Number"]
+current_build_url = build_url(ENV["bamboo_Build_Number"])
 release_notes = ENV["bamboo_Release_Notes"]
 
 # ERB template for release notes.
 template = <<ERB
-# <%= project_name %> (Build #<%= build_number %>)
+# <%= project_name %> ([Build <%= current_build_number %>](<%= current_build_url %>))
 
 <%= release_notes %>
 
