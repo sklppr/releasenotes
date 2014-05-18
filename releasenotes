@@ -40,7 +40,7 @@ end.flatten.uniq
 # A JIRA issue.
 class Issue
 
-  attr_accessor :key, :url, :type, :summary, :description, :status, :sprint, :blocker_keys, :blockers, :is_blocker
+  attr_accessor :key, :url, :type, :summary, :description, :status, :children, :is_child, :parent, :sprint, :blocker_keys
 
   def initialize(data)
     @key = data["key"]
@@ -49,8 +49,9 @@ class Issue
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
     @status = data["fields"]["status"]["name"].downcase
-    @blockers = []
-    @is_blocker = false
+    @children = []
+    @is_child = false
+    @parent = data["fields"]["parent"]["key"] if data["fields"]["parent"]
     # Extract sprint name from custom field.
     @sprint = begin
       sprint = data["fields"][ENV["bamboo_Sprint_Field"]]
@@ -68,11 +69,11 @@ class Issue
     end
   end
 
-  # Recursively generates markdown for this issue and its blocking issues.
+  # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
     issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
-    blockers_md = @blockers.collect { |blocker| blocker.to_md(level+1) }
-    ([issue_md] + blockers_md) * "\n"
+    children_md = @children.collect { |child| child.to_md(level+1) }
+    ([issue_md] + children_md) * "\n"
   end
 
 end
@@ -84,7 +85,7 @@ if ENV["bamboo_Issue_Types"]
   jql_query << " AND type in (#{issue_types.join(",")})"
 end
 search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
-  "&fields=summary,issuetype,status,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
+  "&fields=summary,issuetype,status,parent,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
   "&maxResults=100&validateQuery=false")
 
 # Store issues in a hash according to their key.
@@ -94,19 +95,25 @@ search_result["issues"].each do |issue_data|
   jira_issues[issue.key] = issue
 end
 
-# Create relationships according to blocker keys.
+# Create relationships according to parent field and blocker keys.
+# Only create relationships with issues that exist here and only within the same sprint.
 jira_issues.each do |key, issue|
+  # If issue has a parent issue, add this issue to its parent's children.
+  if issue.parent && (parent = jira_issues[issue.parent]) && (parent.sprint == issue.sprint)
+    parent.children << issue
+    issue.is_child = true
+  end
+  # If issue has blockers, add blockers to this issues children.
   issue.blocker_keys.each do |blocker_key|
-    # Only create relationships with issues that exist here and only within the same sprint.
-    if (blocker = jira_issues[blocker_key]) && (issue.sprint == blocker.sprint)
-      issue.blockers << blocker
-      blocker.is_blocker = true
+    if (blocker = jira_issues[blocker_key]) && (blocker.sprint == issue.sprint)
+      issue.children << blocker
+      blocker.is_child = true
     end
   end
 end
 
-# Group issues by sprint.
-sprints = jira_issues.values.reject(&:is_blocker).group_by(&:sprint)
+# Remove child issues from top-level, then group top-level issues by sprint.
+sprints = jira_issues.values.reject(&:is_child).group_by(&:sprint)
 
 # Get custom release notes.
 release_notes = ENV["bamboo_Release_Notes"]
