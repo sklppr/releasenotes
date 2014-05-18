@@ -29,6 +29,7 @@ Optionally, the following environment variables can be set:
 - `bamboo_Release_Notes_Mode` – Whether to group issues by sprint (`sprint`) or build number (`build`), default: `sprint`
 - `bamboo_Release_Notes_File` – File name for release notes, default: `releasenotes.md`
 - `bamboo_Issue_Types` – Comma-separated list of issue types to display, default: all issue types are displayed
+- `bamboo_Branch_Name` – Branch name to be displayed in addition to build number (e.g. `${bamboo.repository.git.branch}`), default: empty
 
 There are multiple ways to set environment variables:
 
