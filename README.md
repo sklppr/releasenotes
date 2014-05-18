@@ -20,12 +20,13 @@ The generator expects the following environment variables to be set:
 - `bamboo_JIRA_User` – JIRA username
 - `bamboo_JIRA_Password` – JIRA password
 - `bamboo_Plan_Key` – Key of build plan in Bamboo (*not key of build stage or build result*), e.g. `TEST-PLAN`
+- `bamboo_Sprint_Field` – Name of custom field containing JIRA Agile sprint, e.g. `customfield_12345`
 
 Optionally, the following environment variables can be set:
 
 - `bamboo_Release_Notes` – Custom text to be displayed at top of release notes, default: empty
 - `bamboo_Release_Notes_File` – File name for release notes, default: `releasenotes.md`
-- `bamboo_Issue_Types` – Comma-separated list of issue types to display in desired order, default: `Epic, Story, New Feature, Improvement, Bug, Task, Subtask`
+- `bamboo_Issue_Types` – Comma-separated list of issue types to display, default: `Epic, Story, New Feature, Improvement, Bug, Task, Subtask`
 
 There are multiple ways to set environment variables:
 

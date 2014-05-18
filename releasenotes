@@ -9,24 +9,17 @@ require "erb"
 env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
 env.each { |key, value| ENV[key] ||= value }
 
-# Class to encapsulate a specific API.
-class API
-
-  def initialize(server, user, password, base_url="/rest/api/latest/")
-    @server, @user, @password, @base_url = server, user, password, base_url
-  end
-
-  # Request JSON data and return a hash
+# Base for both Bamboo and JIRA API.
+API = Struct.new(:server, :user, :password) do
   def get(query)
-    uri = URI.join(@server, @base_url, query)
+    uri = URI.join(server, "/rest/api/latest/", query)
     request = Net::HTTP::Get.new(uri)
-    request.basic_auth(@user, @password)
+    request.basic_auth(user, password)
     request["Accept"] = "application/json"
     http = Net::HTTP.new(uri.hostname, uri.port)
     response = http.request(request)
     JSON.parse(response.body)
   end
-
 end
 
 # Set up Bamboo and JIRA APIs.
@@ -46,11 +39,10 @@ issue_keys = build_plan["results"]["result"].collect do |result|
   end
 end.flatten
 
-# Class to encapsulate a JIRA issue.
+# A JIRA issue.
 class Issue
 
-  attr_accessor :key, :url, :type, :summary, :description, :status
-  attr_accessor :blocker_keys, :blockers, :is_blocker
+  attr_accessor :key, :url, :type, :summary, :description, :status, :sprint, :blocker_keys, :blockers, :is_blocker
 
   def initialize(data)
     @key = data["key"]
@@ -59,14 +51,23 @@ class Issue
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
     @status = data["fields"]["status"]["name"].downcase
+    @blockers = []
+    @is_blocker = false
+    # Extract sprint name from custom field.
+    @sprint = begin
+      sprint = data["fields"][ENV["bamboo_Sprint_Field"]]
+      sprint_data = sprint.first.match(/^.+\[(.+)\]$/)[1]
+      parsed_sprint_data = Hash[sprint_data.split(",").collect { |s| s.split("=") }]
+      parsed_sprint_data["name"]
+    rescue
+      "Backlog"
+    end
     # Select keys of issues with an inward blocking relationship to this one.
     @blocker_keys = data["fields"]["issuelinks"].select do |link|
       link["type"]["name"] == "Blocks" && link["inwardIssue"]
     end.collect do |link|
       link["inwardIssue"]["key"]
     end
-    @blockers = []
-    @is_blocker = false
   end
 
   # Recursively generates markdown for this issue and its blocking issues.
@@ -78,42 +79,39 @@ class Issue
 
 end
 
-# Get JIRA issues based on issue keys from Bamboo, store them in a hash according to their key.
-search_result = jira.get("search?jql=key%20in%20(#{issue_keys.join("%2C")})&maxResults=100&fields=summary,issuetype,status,issuelinks")
+# Get issues types to display or use all types by default.
+issue_types = ENV["bamboo_Issue_Types"].split(/,\s?/) rescue %w[ Epic Story New\ Feature Improvement Bug Task Subtask ]
+
+# Get JIRA issues based on issue keys from Bamboo and allowed types.
+quoted_issue_types = issue_types.map! { |type| %Q("#{type}") }
+jql_query = "key in (#{issue_keys.join(",")}) AND type in (#{quoted_issue_types.join(",")})"
+search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
+  "&fields=summary,issuetype,status,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
+  "&maxResults=100&validateQuery=false")
+
+# Store issues in a hash according to their key.
 jira_issues = {}
 search_result["issues"].each do |issue_data|
   issue = Issue.new(issue_data)
   jira_issues[issue.key] = issue
 end
 
-# Create relationships according to keys of blocking issues.
-jira_issues.each_pair do |key, issue|
-  issue.blocker_keys.each do |blocker|
-    if jira_issues[blocker]
-      issue.blockers << jira_issues[blocker]
-      jira_issues[blocker].is_blocker = true
+# Create relationships according to blocker keys.
+jira_issues.each do |key, issue|
+  issue.blocker_keys.each do |blocker_key|
+    # Only create relationships with issues that exist here and only within the same sprint.
+    if (blocker = jira_issues[blocker_key]) && (issue.sprint == blocker.sprint)
+      issue.blockers << blocker
+      blocker.is_blocker = true
     end
   end
 end
 
-# Get array of all issues, remove blockers (from the top level) and group issues by type.
-grouped_issues = jira_issues.values.reject(&:is_blocker).group_by(&:type)
+# Group issues by sprint.
+sprints = jira_issues.values.reject(&:is_blocker).group_by(&:sprint)
 
-# Get issue types to display and sort top level sections accordingly.
-issue_types = (ENV["bamboo_Issue_Types"]).split(/,\s?/) rescue ["Epic", "Story", "New Feature", "Improvement", "Bug", "Task", "Subtask"]
-sections = grouped_issues.keys.sort_by { |type| issue_types.index(type) }
-  
 # Get custom release notes.
 release_notes = ENV["bamboo_Release_Notes"]
-
-# Helper to pluralize type names.
-def pluralize(word)
-  case word
-    when /y$/ then word.slice(0, word.length - 1) + "ies"
-    when /(o|x)$/ then word + "es"
-    else word + "s"
-  end
-end
 
 # ERB template for release notes.
 template = <<ERB
@@ -121,14 +119,14 @@ template = <<ERB
 
 <%= release_notes %>
 
-<% sections.each do |type| %>
-## <%= pluralize(type) %>
+<% sprints.each_pair do |sprint, issues| %>
 
-<% grouped_issues[type].each do |issue| %>
+## <%= sprint %>
+
+<% issues.each do |issue| %>
 <%= issue.to_md %>
 
 <% end %>
-
 <% end %>
 ERB
 
