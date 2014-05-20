@@ -9,6 +9,12 @@ require "erb"
 env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
 env.each { |key, value| ENV[key] ||= value.to_s }
 
+# Check if a single login is provided for both Bamboo and JIRA.
+if ENV["bamboo_Atlassian_User"] && ENV["bamboo_Atlassian_Password"]
+  ENV["bamboo_Bamboo_User"] = ENV["bamboo_JIRA_User"] = ENV["bamboo_Atlassian_User"]
+  ENV["bamboo_Bamboo_Password"] = ENV["bamboo_JIRA_Password"] = ENV["bamboo_Atlassian_Password"]
+end
+
 # Determine display mode.
 DISPLAY_MODE = ENV["bamboo_Release_Notes_Mode"].downcase rescue "sprint"
 
