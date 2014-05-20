@@ -1,35 +1,58 @@
 #!/usr/bin/env ruby
 
-require "yaml"
 require "net/http"
+require "yaml"
 require "json"
 require "erb"
 
 # Merge variables from .env file into environment.
-env = YAML.load(File.read(File.join(__dir__, "releasenotes.env"))) rescue {}
+env = YAML.load(File.read(File.join(__dir__, "releasenotes.env")))
 env.each { |key, value| ENV[key] ||= value.to_s }
 
-# Check if a single login is provided for both Bamboo and JIRA.
-if ENV["bamboo_Atlassian_User"] && ENV["bamboo_Atlassian_Password"]
-  ENV["bamboo_Bamboo_User"] = ENV["bamboo_JIRA_User"] = ENV["bamboo_Atlassian_User"]
-  ENV["bamboo_Bamboo_Password"] = ENV["bamboo_JIRA_Password"] = ENV["bamboo_Atlassian_Password"]
+# Returns variable from environment or nil if it's nil/empty/whitespace.
+def optional_env(name)
+  if ENV[name].to_s.strip.empty? then nil else ENV[name] end
 end
 
-# Check if all required variables are provided.
-abort = false
-%w[
-  bamboo_JIRA_Server bamboo_Bamboo_Server bamboo_JIRA_User bamboo_JIRA_Password bamboo_Bamboo_User
-  bamboo_Bamboo_Password bamboo_Plan_Key bamboo_Build_Number bamboo_Sprint_Field
-].each do |var|
-  unless ENV[var]
-    puts "#{var.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!"
-    abort = true
+# Returns variable from environment or, if it's nil/empty/whitespace, complains that it's not set and exits.
+def required_env(name)
+  if ENV[name].to_s.strip.empty?
+    puts "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!"
+    exit!
   end
+  ENV[name]
 end
-exit! if abort
 
-# Determine display mode.
-DISPLAY_MODE = ENV["bamboo_Release_Notes_Mode"].downcase rescue "sprint"
+# Import required variables.
+JIRA_SERVER = required_env("bamboo_JIRA_Server")
+BAMBOO_SERVER = required_env("bamboo_Bamboo_Server")
+SPRINT_FIELD = required_env("bamboo_Sprint_Field")
+
+# Import authentication information.
+JIRA_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_JIRA_User")
+JIRA_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_JIRA_Password")
+BAMBOO_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_Bamboo_User")
+BAMBOO_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_Bamboo_Password")
+
+# Import and parse build result key or import build plan, stage and number.
+if build_result = optional_env("bamboo_Build_Result")
+  BUILD_RESULT_PATTERN = Regexp.new(optional_env("bamboo_Build_Result_Pattern") || '^(?<plan>[\w-]+)-(?<stage>\w+)-(?<number>\d+)$')
+  parsed_build_result = BUILD_RESULT_PATTERN.match(build_result)
+  BUILD_PLAN = parsed_build_result["plan"]
+  BUILD_STAGE = parsed_build_result["stage"]
+  BUILD_NUMBER = parsed_build_result["number"]
+else
+  BUILD_PLAN = required_env("bamboo_Build_Plan")
+  BUILD_STAGE = required_env("bamboo_Build_Stage")
+  BUILD_NUMBER = required_env("bamboo_Build_Number")
+end
+
+# Import optional variables.
+RELEASE_NOTES = optional_env("bamboo_Release_Notes")
+BRANCH_NAME = optional_env("bamboo_Branch_Name")
+ISSUE_TYPES = optional_env("bamboo_Issue_Types")
+RELEASE_NOTES_MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase.to_sym
+RELEASE_NOTES_FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
@@ -39,23 +62,24 @@ API = Struct.new(:server, :user, :password) do
     request.basic_auth(user, password)
     request["Accept"] = "application/json"
     http = Net::HTTP.new(uri.hostname, uri.port)
+    http.use_ssl = true if uri.is_a?(URI::HTTPS)
     response = http.request(request)
     JSON.parse(response.body)
   end
 end
 
 # Set up Bamboo and JIRA APIs.
-bamboo = API.new(ENV["bamboo_Bamboo_Server"], ENV["bamboo_Bamboo_User"], ENV["bamboo_Bamboo_Password"])
-jira = API.new(ENV["bamboo_JIRA_Server"], ENV["bamboo_JIRA_User"], ENV["bamboo_JIRA_Password"])
+bamboo = API.new(BAMBOO_SERVER, BAMBOO_USER, BAMBOO_PASSWORD)
+jira = API.new(JIRA_SERVER, JIRA_USER, JIRA_PASSWORD)
 
 # Fetch data of both build plan and current build from Bamboo, because build plan doesn't contain current build yet.
-build_plan = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}?expand=results.result.jiraIssues&max-result=100")
-current_build = bamboo.get("result/#{ENV["bamboo_Plan_Key"]}-#{ENV["bamboo_Build_Number"]}?expand=jiraIssues")
+build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&max-result=100")
+current_build = bamboo.get("result/#{BUILD_PLAN}-#{BUILD_NUMBER}?expand=jiraIssues")
 all_builds = [current_build] + build_plan["results"]["result"]
 
 # Generates URL for a specific build.
 def build_url(build_number)
-  URI.join(ENV["bamboo_Bamboo_Server"], "browse/", "#{ENV["bamboo_Plan_Key"]}-#{build_number}")
+  URI.join(BAMBOO_SERVER, "browse/", "#{BUILD_PLAN}-#{build_number}")
 end
 
 # A JIRA issue.
@@ -66,7 +90,7 @@ class Issue
 
   def initialize(data)
     @key = data["key"]
-    @url = URI.join(ENV["bamboo_JIRA_Server"], "browse/", @key)
+    @url = URI.join(JIRA_SERVER, "browse/", @key)
     @type = data["fields"]["issuetype"]["name"]
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
@@ -76,14 +100,11 @@ class Issue
     @is_child = false
     @parent = data["fields"]["parent"]["key"] if data["fields"]["parent"]
     # Extract sprint name by parsing custom field.
-    @sprint = begin
-      sprint = data["fields"][ENV["bamboo_Sprint_Field"]]
-      sprint_data = sprint.first.match(/^.+\[(.+)\]$/)[1]
+    @sprint = if sprint = data["fields"][SPRINT_FIELD]
+      sprint_data = sprint[0].match(/^.+\[(.+)\]$/)[1]
       parsed_sprint_data = Hash[sprint_data.split(",").collect { |s| s.split("=") }]
       parsed_sprint_data["name"]
-    rescue
-      "Backlog"
-    end
+    else "Backlog" end
     # Select keys of issues with an inward blocking relationship to this one.
     @blocker_keys = data["fields"]["issuelinks"].select do |link|
       link["type"]["name"] == "Blocks" && link["inwardIssue"]
@@ -95,7 +116,7 @@ class Issue
   # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
     issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
-    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if DISPLAY_MODE == "sprint"
+    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if RELEASE_NOTES_MODE == :sprint
     children_md = @children.collect { |child| child.to_md(level+1) }
     ([issue_md] + children_md) * "\n"
   end
@@ -103,9 +124,9 @@ class Issue
 end
 
 # If allowed issue types are specified, construct respective query string with quoted types.
-jql_issue_types = if ENV["bamboo_Issue_Types"]
-  allowed_types = ENV["bamboo_Issue_Types"].split(/,\s?/).map { |type| %Q("#{type}") }
-  " AND type in (#{allowed_types.join(",")})"
+if ISSUE_TYPES
+  allowed_types = ISSUE_TYPES.split(/,\s?/).map { |type| %Q("#{type}") }
+  jql_issue_types = " AND type in (#{allowed_types.join(",")})"
 end
 
 # Fetch JIRA issues for each build. Store all issues in a hash based on their key.
@@ -115,7 +136,7 @@ all_builds.each do |build|
   next if issue_keys.empty?
   jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_types}"
   search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
-    "&fields=summary,issuetype,status,parent,issuelinks,#{ENV["bamboo_Sprint_Field"]}" +
+    "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
     "&maxResults=100&validateQuery=false")
   search_result["issues"].each do |issue_data|
     issue = Issue.new(issue_data)
@@ -143,16 +164,16 @@ end
 
 # Remove child issues from top-level, then group top-level issues according to display mode.
 display_issues = jira_issues.values.reject(&:is_child)
-sections = case DISPLAY_MODE
-  when "sprint" then display_issues.group_by(&:sprint)
-  when "build" then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
+sections = case RELEASE_NOTES_MODE
+  when :sprint then display_issues.group_by(&:sprint)
+  when :build then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
 end
 
 # Gather remaining data to display.
 project_name = current_build["projectName"]
-current_build_number = (if ENV["bamboo_Branch_Name"] then "#{ENV["bamboo_Branch_Name"]}-" else "#" end) + ENV["bamboo_Build_Number"]
-current_build_url = build_url(ENV["bamboo_Build_Number"])
-release_notes = ENV["bamboo_Release_Notes"]
+current_build_number = (if BRANCH_NAME then "#{BRANCH_NAME}-" else "#" end) + BUILD_NUMBER
+current_build_url = build_url(BUILD_NUMBER)
+release_notes = RELEASE_NOTES
 
 # ERB template for release notes.
 template = <<ERB
@@ -173,4 +194,4 @@ ERB
 
 # Render release notes to file.
 output = ERB.new(template, nil, "<>").result(binding)
-File.write(ENV["bamboo_Release_Notes_File"] || "releasenotes.md", output)
+File.write(RELEASE_NOTES_FILE, output)
