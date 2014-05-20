@@ -15,6 +15,19 @@ if ENV["bamboo_Atlassian_User"] && ENV["bamboo_Atlassian_Password"]
   ENV["bamboo_Bamboo_Password"] = ENV["bamboo_JIRA_Password"] = ENV["bamboo_Atlassian_Password"]
 end
 
+# Check if all required variables are provided.
+abort = false
+%w[
+  bamboo_JIRA_Server bamboo_Bamboo_Server bamboo_JIRA_User bamboo_JIRA_Password bamboo_Bamboo_User
+  bamboo_Bamboo_Password bamboo_Plan_Key bamboo_Build_Number bamboo_Sprint_Field
+].each do |var|
+  unless ENV[var]
+    puts "#{var.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!"
+    abort = true
+  end
+end
+exit! if abort
+
 # Determine display mode.
 DISPLAY_MODE = ENV["bamboo_Release_Notes_Mode"].downcase rescue "sprint"
 
