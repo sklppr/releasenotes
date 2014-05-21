@@ -10,8 +10,9 @@ Additionally, you can:
 
 - add your own message,
 - include the branch name,
-- filter issues by type and
-- change how issues are grouped.
+- filter issues by type,
+- change how issues are grouped and
+- change the release notes file name.
 
 ## Installation
 
@@ -127,3 +128,7 @@ Available display modes are:
 
 - `sprint` (default) – Issues are grouped by sprint and sort descending (newest sprint first).
 - `build` – Issues are grouped by build number and sort descending (newest build first).
+
+### Changing the file name
+
+You can change the name of the release notes file by providing a variable called `bamboo_Release_Notes_File`. The default file name is `releasenotes.md`.
