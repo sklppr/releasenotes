@@ -105,7 +105,7 @@ class Issue
       sprint_data = sprint[0].match(/^.+\[(.+)\]$/)[1]
       parsed_sprint_data = Hash[sprint_data.split(",").collect { |s| s.split("=") }]
       parsed_sprint_data["name"]
-    else "Backlog" end
+    else "Other Issues" end
     # Select keys of issues with an inward blocking relationship to this one.
     @blocker_keys = data["fields"]["issuelinks"].select do |link|
       link["type"]["name"] == "Blocks" && link["inwardIssue"]
@@ -163,12 +163,13 @@ jira_issues.each do |key, issue|
   end
 end
 
-# Remove child issues from top-level, then group top-level issues according to display mode.
+# Remove child issues from top-level, then group according to display mode, in reverse alphabetical order.
 display_issues = jira_issues.values.reject(&:is_child)
-sections = case RELEASE_NOTES_MODE
+groups = case RELEASE_NOTES_MODE
   when :sprint then display_issues.group_by(&:sprint)
   when :build then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
 end
+sections = Hash[groups.sort.reverse]
 
 # Gather remaining data to display.
 project_name = current_build["projectName"]
