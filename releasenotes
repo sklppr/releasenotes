@@ -18,7 +18,7 @@ end
 def required_env(name)
   if ENV[name].to_s.strip.empty?
     puts "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!"
-    exit!
+    exit
   end
   ENV[name]
 end
