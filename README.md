@@ -18,7 +18,7 @@ Additionally, you can:
 
 ### Installing the release notes generator
 
-**Prerequisites:** JIRA 6.2, Bamboo 5.5 and Ruby 2.1 (other versions might work but weren’t tested).
+**Prerequisites:** JIRA 6.2, Bamboo 5.5 and Ruby 2.0 (other versions might work but weren’t tested).
 
 The generator script is self-contained. Just place it somewhere and make it executable: `chmod +x releasenotes`
 
@@ -31,11 +31,11 @@ Don’t forget to also define an artifact for the release notes file (default fi
 
 There are multiple ways to set environment variables:
 
-1. Create a **build plan variable** in Bamboo. In this case, leave off the `bamboo_` prefix since Bamboo will add that automatically.
+1. Create a **global variable** or **build plan variable** in Bamboo. In this case, leave off the `bamboo_` prefix since Bamboo will add that automatically.
 2. Specify an **environment variable** for the Bamboo build task using the following syntax: `bamboo_Plan_Key="TEST-PLAN"`
 3. Place a **`releasenotes.env` file** in the same location as the script. The file is using YAML syntax: `bamboo_Plan_Key: TEST-PLAN`
 
-In general, environment variables set on a build task will overwrite build plan variables. Build plan variables are useful because they can be overridden using a custom build. However, some variables *have* to be set on the build task in order to use Bamboo’s global variables.
+In general, environment variables set on a build task will overwrite build plan variables which will overwrite global variables. Global or build plan variables are useful because they can be overridden using a custom build. However, some variables *have* to be set on the build task in order to use variable substitution.
 
 The variables from the `releasenotes.env` file won’t overwrite environment variables that are already set. Therefore, the file can be used for global configuration, storing sensitive information (e.g. passwords) or providing defaults that users can override in Bamboo.
 
@@ -116,9 +116,9 @@ You can include the name of the current branch in your release notes by adding a
 
 By default, all issues types are displayed. To change this, provide a variable named `bamboo_Issue_Types` with a comma-separated list of allowed issue types (i.e. a whitelist).
 
-**Important:** Issue types must be spelled exactly as defined in JIRA, this includes case-sensitivity.  
+**Important:** Issue types are not case sensitive but have to be spelled exactly as defined in JIRA (including spaces).  
 Examples: Epic, User Story, New Feature, Improvement, Bug, Impediment, Task, Sub-task.  
-In this case, “feature”, “Feature”, “new feature” or “New feature” won’t work, only “New Feature” is correct.
+In this case, “New Feature”, “New feature” or “new feature” are correct but “Feature”, “feature” or “newfeature” are not.
 
 ### Changing how issues are grouped
 
