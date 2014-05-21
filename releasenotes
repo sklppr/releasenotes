@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 
+begin # global exception handling
+
 require "net/http"
 require "yaml"
 require "json"
@@ -16,11 +18,7 @@ end
 
 # Returns variable from environment or, if it's nil/empty/whitespace, complains that it's not set and exits.
 def required_env(name)
-  if ENV[name].to_s.strip.empty?
-    puts "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!"
-    exit
-  end
-  ENV[name]
+  if ENV[name].to_s.strip.empty? then raise "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!" else ENV[name] end
 end
 
 # Import required variables.
@@ -198,3 +196,7 @@ ERB
 # Render release notes to file.
 output = ERB.new(template, nil, "<>").result(binding)
 File.write(RELEASE_NOTES_FILE, output)
+
+rescue # global exception handling
+  puts $!.inspect, $@
+end
