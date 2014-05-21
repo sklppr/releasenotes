@@ -54,6 +54,9 @@ ISSUE_TYPES = optional_env("bamboo_Issue_Types")
 RELEASE_NOTES_MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase.to_sym
 RELEASE_NOTES_FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
+# Delete the old release notes file.
+File.delete(RELEASE_NOTES_FILE) if File.exists?(RELEASE_NOTES_FILE)
+
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
   def get(query)
