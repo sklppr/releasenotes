@@ -46,14 +46,15 @@ else
 end
 
 # Import optional variables.
-RELEASE_NOTES = optional_env("bamboo_Release_Notes")
 BRANCH_NAME = optional_env("bamboo_Branch_Name")
-ISSUE_TYPES = optional_env("bamboo_Issue_Types")
-RELEASE_NOTES_MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase.to_sym
-RELEASE_NOTES_FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
+MESSAGE = optional_env("bamboo_Release_Notes")
+ISSUE_TYPE = (optional_env("bamboo_Release_Notes_Issue_Type") || "").split(/,\s?/)
+ISSUE_STATUS = (optional_env("bamboo_Release_Notes_Issue_Status") || "").split(/,\s?/)
+MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase.to_sym
+FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
 # Delete the old release notes file.
-File.delete(RELEASE_NOTES_FILE) if File.exists?(RELEASE_NOTES_FILE)
+File.delete(FILE) if File.exists?(FILE)
 
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
@@ -117,25 +118,23 @@ class Issue
   # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
     issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
-    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if RELEASE_NOTES_MODE == :sprint
+    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if MODE == :sprint
     children_md = @children.collect { |child| child.to_md(level+1) }
     ([issue_md] + children_md) * "\n"
   end
 
 end
 
-# If allowed issue types are specified, construct respective query string with quoted types.
-if ISSUE_TYPES
-  allowed_types = ISSUE_TYPES.split(/,\s?/).map { |type| %Q("#{type}") }
-  jql_issue_types = " AND type in (#{allowed_types.join(",")})"
-end
+# If issue filters are specified, construct respective query string (quoting all items).
+jql_issue_type = " AND type in (#{ISSUE_TYPE.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_TYPE.empty?
+jql_issue_status = " AND status in (#{ISSUE_STATUS.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_STATUS.empty?
 
 # Fetch JIRA issues for each build. Store all issues in a hash based on their key.
 jira_issues = {}
 all_builds.each do |build|
   issue_keys = build["jiraIssues"]["issue"].collect { |issue| issue["key"] }
   next if issue_keys.empty?
-  jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_types}"
+  jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_type}#{jql_issue_status}"
   search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
     "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
     "&maxResults=100&validateQuery=false")
@@ -165,7 +164,7 @@ end
 
 # Remove child issues from top-level, then group according to display mode, in reverse alphabetical order.
 display_issues = jira_issues.values.reject(&:is_child)
-groups = case RELEASE_NOTES_MODE
+groups = case MODE
   when :sprint then display_issues.group_by(&:sprint)
   when :build then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
 end
@@ -175,13 +174,13 @@ sections = Hash[groups.sort.reverse]
 project_name = current_build["projectName"]
 current_build_number = (if BRANCH_NAME then "#{BRANCH_NAME}-" else "#" end) + BUILD_NUMBER
 current_build_url = build_url(BUILD_NUMBER)
-release_notes = RELEASE_NOTES
+message = MESSAGE
 
 # ERB template for release notes.
 template = <<ERB
 # <%= project_name %> ([Build <%= current_build_number %>](<%= current_build_url %>))
 
-<%= release_notes %>
+<%= message %>
 
 <% sections.each_pair do |section, issues| %>
 
@@ -196,7 +195,7 @@ ERB
 
 # Render release notes to file.
 output = ERB.new(template, nil, "<>").result(binding)
-File.write(RELEASE_NOTES_FILE, output)
+File.write(FILE, output)
 
 rescue # global exception handling
   puts $!.inspect, $@
