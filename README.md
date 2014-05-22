@@ -93,7 +93,7 @@ The script will fetch all JIRA issues linked to any build in the build plan, inc
 
 ### Adding a custom message
 
-You can add a custom message to your release notes by providing a variable called `bamboo_Release_Notes`.  
+You can add a custom message to your release notes by providing a variable called `bamboo_Release_Notes_Message`.  
 This message will appear between heading and issues and can also contain Markdown.
 
 It’s usually best to define this variable on your build plan. You can then use it in a couple of ways:
@@ -102,7 +102,7 @@ It’s usually best to define this variable on your build plan. You can then use
 - Leave it empty and later add a message using a customised build.
 - Enter a default message and override it using a customised build.
 
-**How to run a customised build:** Click “Run” > “Run customised…”, then click “Override a variable” and select “Release_Notes”.
+**How to run a customised build:** Click “Run” > “Run customised…”, then click “Override a variable” and select “Release_Notes_Message”.
 
 ### Including the branch name
 
@@ -112,13 +112,16 @@ You can include the name of the current branch in your release notes by adding a
 - Mercurial: `bamboo_Branch_Name="${bamboo.repository.hg.branch}"`
 - Subversion: `bamboo_Branch_Name="${bamboo.repository.svn.branch}"`
 
-### Filtering issues by type
+### Filtering issues by type or status
 
-By default, all issues types are displayed. To change this, provide a variable named `bamboo_Issue_Types` with a comma-separated list of allowed issue types (i.e. a whitelist).
+By default, all issues linked to a build plan are displayed. To change this, provide the following variables:
 
-**Important:** Issue types are not case sensitive but have to be spelled exactly as defined in JIRA (including spaces).  
-Examples: Epic, User Story, New Feature, Improvement, Bug, Impediment, Task, Sub-task.  
-In this case, “New Feature”, “New feature” or “new feature” are correct but “Feature”, “feature” or “newfeature” are not.
+- `bamboo_Release_Notes_Issue_Type` – allowed issue types (e.g. Epic, User Story, New Feature, Improvement, Bug, Impediment, Task, Sub-task)
+- `bamboo_Release_Notes_Issue_Status` – allowed issue status (e.g. Open, To Do, In Progress, Blocked, Closed, Done)
+
+The value is expected to be a comma-separated list of allowed issue types or status, i.e. a whitelist.
+
+**Important:** Issue types and status are not case sensitive but have to be spelled exactly as defined in JIRA (including spaces).
 
 ### Changing how issues are grouped
 
