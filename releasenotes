@@ -48,9 +48,10 @@ end
 # Import optional variables.
 BRANCH_NAME = optional_env("bamboo_Branch_Name")
 MESSAGE = optional_env("bamboo_Release_Notes")
-ISSUE_TYPE = (optional_env("bamboo_Release_Notes_Issue_Type") || "").split(/,\s?/)
-ISSUE_STATUS = (optional_env("bamboo_Release_Notes_Issue_Status") || "").split(/,\s?/)
-MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase.to_sym
+ISSUE_TYPE = (optional_env("bamboo_Release_Notes_Issue_Type") || "").split(/,\s?/).map(&:downcase)
+ISSUE_STATUS = (optional_env("bamboo_Release_Notes_Issue_Status") || "").split(/,\s?/).map(&:downcase)
+MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase
+ISSUE_INFO = (optional_env("bamboo_Release_Notes_Issue_Info") || "type, status, build").split(/,\s?/).map(&:downcase)
 FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
 # Delete the old release notes file.
@@ -87,7 +88,7 @@ end
 # A JIRA issue.
 class Issue
 
-  attr_accessor :key, :url, :type, :summary, :description, :status, :sprint, :build_number
+  attr_accessor :key, :url, :type, :summary, :description, :status, :sprint, :build
   attr_accessor :parent, :children, :is_child, :blocker_keys
 
   def initialize(data)
@@ -97,7 +98,7 @@ class Issue
     @summary = data["fields"]["summary"]
     @description = data["fields"]["description"]
     @status = data["fields"]["status"]["name"]
-    @build_number = ""
+    @build = ""
     @children = []
     @is_child = false
     @parent = data["fields"]["parent"]["key"] if data["fields"]["parent"]
@@ -117,8 +118,12 @@ class Issue
 
   # Recursively generates markdown for this issue and its child issues.
   def to_md(level=0)
-    issue_md = ("\t" * level) + "* [#{@type}: #{@summary}](#{@url}) (#{@status})"
-    issue_md << " ([Build ##{@build_number}](#{build_url(@build_number)}))" if MODE == :sprint
+    issue_md = ("\t" * level) + "* [#{@summary}](#{@url})"
+    info = []
+    info << @type if ISSUE_INFO.include? "type"
+    info << @status if ISSUE_INFO.include? "status"
+    info << "Build ##{@build}" if ISSUE_INFO.include? "build"
+    issue_md << " (#{info.join(", ")})" unless info.empty?
     children_md = @children.collect { |child| child.to_md(level+1) }
     ([issue_md] + children_md) * "\n"
   end
@@ -140,7 +145,7 @@ all_builds.each do |build|
     "&maxResults=100&validateQuery=false")
   search_result["issues"].each do |issue_data|
     issue = Issue.new(issue_data)
-    issue.build_number = build["planResultKey"]["resultNumber"]
+    issue.build = build["planResultKey"]["resultNumber"]
     jira_issues[issue.key] = issue
   end
 end
@@ -165,8 +170,8 @@ end
 # Remove child issues from top-level, then group according to display mode, in reverse alphabetical order.
 display_issues = jira_issues.values.reject(&:is_child)
 groups = case MODE
-  when :sprint then display_issues.group_by(&:sprint)
-  when :build then display_issues.group_by { |issue| "Build ##{issue.build_number}" }
+  when "sprint" then display_issues.group_by(&:sprint)
+  when "build" then display_issues.group_by { |issue| "Build ##{issue.build}" }
 end
 sections = Hash[groups.sort.reverse]
 

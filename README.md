@@ -11,7 +11,8 @@ Additionally, you can:
 - add your own message,
 - include the branch name,
 - filter issues by type,
-- change how issues are grouped and
+- change how issues are grouped,
+- change how issues are displayed and
 - change the release notes file name.
 
 ## Installation
@@ -131,6 +132,16 @@ Available display modes are:
 
 - `sprint` (default) – Issues are grouped by sprint and sort descending (newest sprint first).
 - `build` – Issues are grouped by build number and sort descending (newest build first).
+
+### Changing how issues are displayed
+
+By default, several pieces of information are displayed alongside each issue. You can control this by providing a variable called `bamboo_Release_Notes_Issue_Info` with a comma-separated list of infos to display.
+
+Available pieces of information are:
+
+- `type` – issue type (e.g. User Story, New Feature, Bug)
+- `status` – issue status (e.g. Closed, In Progress)
+- `build` – number of the last build this issue was associated with
 
 ### Changing the file name
 
