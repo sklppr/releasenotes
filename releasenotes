@@ -54,6 +54,10 @@ MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase
 ISSUE_INFO = (optional_env("bamboo_Release_Notes_Issue_Info") || "type, status, build").split(/,\s?/).map(&:downcase)
 FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
+# Restrictions for API calls.
+MAX_BUILDS = 100
+MAX_ISSUES = 100
+
 # Delete the old release notes file.
 File.delete(FILE) if File.exists?(FILE)
 
@@ -61,12 +65,15 @@ File.delete(FILE) if File.exists?(FILE)
 API = Struct.new(:server, :user, :password) do
   def get(query)
     uri = URI.join(server, "/rest/api/latest/", query)
+    puts ">> Sending Request", uri
     request = Net::HTTP::Get.new(uri)
     request.basic_auth(user, password)
     request["Accept"] = "application/json"
     http = Net::HTTP.new(uri.hostname, uri.port)
     http.use_ssl = true if uri.is_a?(URI::HTTPS)
+    start = Time.now
     response = http.request(request)
+    puts "<< Received Response", "Duration: #{(Time.now - start)} s", "Status: #{response.code} #{response.message}"
     JSON.parse(response.body)
   end
 end
@@ -76,7 +83,7 @@ bamboo = API.new(BAMBOO_SERVER, BAMBOO_USER, BAMBOO_PASSWORD)
 jira = API.new(JIRA_SERVER, JIRA_USER, JIRA_PASSWORD)
 
 # Fetch data of both build plan and current build from Bamboo, because build plan doesn't contain current build yet.
-build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&max-result=100")
+build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&max-result=#{MAX_BUILDS}")
 current_build = bamboo.get("result/#{BUILD_PLAN}-#{BUILD_NUMBER}?expand=jiraIssues")
 all_builds = [current_build] + build_plan["results"]["result"]
 
@@ -134,20 +141,26 @@ end
 jql_issue_type = " AND type in (#{ISSUE_TYPE.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_TYPE.empty?
 jql_issue_status = " AND status in (#{ISSUE_STATUS.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_STATUS.empty?
 
-# Fetch JIRA issues for each build. Store all issues in a hash based on their key.
-jira_issues = {}
+# Map issue keys to build numbers to be able to assign them to the issues later.
+issue_build_numbers = {}
 all_builds.each do |build|
   issue_keys = build["jiraIssues"]["issue"].collect { |issue| issue["key"] }
-  next if issue_keys.empty?
-  jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_type}#{jql_issue_status}"
-  search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
-    "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
-    "&maxResults=100&validateQuery=false")
-  search_result["issues"].each do |issue_data|
-    issue = Issue.new(issue_data)
-    issue.build = build["planResultKey"]["resultNumber"]
-    jira_issues[issue.key] = issue
-  end
+  issue_keys.each { |issue| issue_build_numbers[issue] = build["planResultKey"]["resultNumber"] }
+end
+
+# Fetch data of all issues from JIRA at once.
+issue_keys = issue_build_numbers.keys
+jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_type}#{jql_issue_status}"
+search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
+  "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
+  "&maxResults=#{MAX_ISSUES}&validateQuery=false")
+
+# Store all issues in a hash based on their key, also assign build numbers.
+jira_issues = {}
+search_result["issues"].each do |issue_data|
+  issue = Issue.new(issue_data)
+  issue.build = issue_build_numbers[issue.key]
+  jira_issues[issue.key] = issue
 end
 
 # Create relationships according to parent field and blocker keys.
