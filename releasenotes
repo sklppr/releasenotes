@@ -7,59 +7,9 @@ require "yaml"
 require "json"
 require "erb"
 
-# Merge variables from .env file into environment.
-env = YAML.load(File.read(File.join(__dir__, "releasenotes.env")))
-env.each { |key, value| ENV[key] ||= value.to_s }
-
-# Returns variable from environment or nil if it's nil/empty/whitespace.
-def optional_env(name)
-  if ENV[name].to_s.strip.empty? then nil else ENV[name] end
-end
-
-# Returns variable from environment or, if it's nil/empty/whitespace, complains that it's not set and exits.
-def required_env(name)
-  if ENV[name].to_s.strip.empty? then raise "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!" else ENV[name] end
-end
-
-# Import required variables.
-JIRA_SERVER = required_env("bamboo_JIRA_Server")
-BAMBOO_SERVER = required_env("bamboo_Bamboo_Server")
-SPRINT_FIELD = required_env("bamboo_Sprint_Field")
-
-# Import authentication information.
-JIRA_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_JIRA_User")
-JIRA_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_JIRA_Password")
-BAMBOO_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_Bamboo_User")
-BAMBOO_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_Bamboo_Password")
-
-# Import and parse build result key or import build plan, stage and number.
-if build_result = optional_env("bamboo_Build_Result")
-  BUILD_RESULT_PATTERN = Regexp.new(optional_env("bamboo_Build_Result_Pattern") || '^(?<plan>[\w-]+)-(?<stage>\w+)-(?<number>\d+)$')
-  parsed_build_result = BUILD_RESULT_PATTERN.match(build_result)
-  BUILD_PLAN = parsed_build_result["plan"]
-  BUILD_STAGE = parsed_build_result["stage"]
-  BUILD_NUMBER = parsed_build_result["number"]
-else
-  BUILD_PLAN = required_env("bamboo_Build_Plan")
-  BUILD_STAGE = required_env("bamboo_Build_Stage")
-  BUILD_NUMBER = required_env("bamboo_Build_Number")
-end
-
-# Import optional variables.
-BRANCH_NAME = optional_env("bamboo_Branch_Name")
-MESSAGE = optional_env("bamboo_Release_Notes")
-ISSUE_TYPE = (optional_env("bamboo_Release_Notes_Issue_Type") || "").split(/,\s?/).map(&:downcase)
-ISSUE_STATUS = (optional_env("bamboo_Release_Notes_Issue_Status") || "").split(/,\s?/).map(&:downcase)
-MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase
-ISSUE_INFO = (optional_env("bamboo_Release_Notes_Issue_Info") || "type, status, build").split(/,\s?/).map(&:downcase)
-FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
-
-# Restrictions for API calls.
-MAX_BUILDS = 100
-MAX_ISSUES = 100
-
-# Delete the old release notes file.
-File.delete(FILE) if File.exists?(FILE)
+###############
+### Classes ###
+###############
 
 # Base for both Bamboo and JIRA API.
 API = Struct.new(:server, :user, :password) do
@@ -76,20 +26,6 @@ API = Struct.new(:server, :user, :password) do
     puts "<< Received Response", "Duration: #{(Time.now - start)} s", "Status: #{response.code} #{response.message}"
     JSON.parse(response.body)
   end
-end
-
-# Set up Bamboo and JIRA APIs.
-bamboo = API.new(BAMBOO_SERVER, BAMBOO_USER, BAMBOO_PASSWORD)
-jira = API.new(JIRA_SERVER, JIRA_USER, JIRA_PASSWORD)
-
-# Fetch data of both build plan and current build from Bamboo, because build plan doesn't contain current build yet.
-build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&max-result=#{MAX_BUILDS}")
-current_build = bamboo.get("result/#{BUILD_PLAN}-#{BUILD_NUMBER}?expand=jiraIssues")
-all_builds = [current_build] + build_plan["results"]["result"]
-
-# Generates URL for a specific build.
-def build_url(build_number)
-  URI.join(BAMBOO_SERVER, "browse/", "#{BUILD_PLAN}-#{build_number}")
 end
 
 # A JIRA issue.
@@ -136,6 +72,86 @@ class Issue
   end
 
 end
+
+###############
+### Helpers ###
+###############
+
+# Returns variable from environment or nil if it's nil/empty/whitespace.
+def optional_env(name)
+  if ENV[name].to_s.strip.empty? then nil else ENV[name] end
+end
+
+# Returns variable from environment or, if it's nil/empty/whitespace, complains that it's not set and exits.
+def required_env(name)
+  if ENV[name].to_s.strip.empty? then raise "#{name.match(/bamboo_(.+)/)[1].gsub("_", " ")} not set!" else ENV[name] end
+end
+
+# Generates URL for a specific build.
+def build_url(build_number)
+  URI.join(BAMBOO_SERVER, "browse/", "#{BUILD_PLAN}-#{build_number}")
+end
+
+#################
+### Variables ###
+#################
+
+# Merge variables from .env file into environment.
+env = YAML.load(File.read(File.join(__dir__, "releasenotes.env")))
+env.each { |key, value| ENV[key] ||= value.to_s }
+
+# Import required variables.
+JIRA_SERVER = required_env("bamboo_JIRA_Server")
+BAMBOO_SERVER = required_env("bamboo_Bamboo_Server")
+SPRINT_FIELD = required_env("bamboo_Sprint_Field")
+
+# Import authentication information.
+JIRA_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_JIRA_User")
+JIRA_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_JIRA_Password")
+BAMBOO_USER = optional_env("bamboo_Atlassian_User") || required_env("bamboo_Bamboo_User")
+BAMBOO_PASSWORD = optional_env("bamboo_Atlassian_Password") || required_env("bamboo_Bamboo_Password")
+
+# Import and parse build result key or import build plan, stage and number.
+if build_result = optional_env("bamboo_Build_Result")
+  BUILD_RESULT_PATTERN = Regexp.new(optional_env("bamboo_Build_Result_Pattern") || '^(?<plan>[\w-]+)-(?<stage>\w+)-(?<number>\d+)$')
+  parsed_build_result = BUILD_RESULT_PATTERN.match(build_result)
+  BUILD_PLAN = parsed_build_result["plan"]
+  BUILD_STAGE = parsed_build_result["stage"]
+  BUILD_NUMBER = parsed_build_result["number"]
+else
+  BUILD_PLAN = required_env("bamboo_Build_Plan")
+  BUILD_STAGE = required_env("bamboo_Build_Stage")
+  BUILD_NUMBER = required_env("bamboo_Build_Number")
+end
+
+# Import optional variables.
+BRANCH_NAME = optional_env("bamboo_Branch_Name")
+MESSAGE = optional_env("bamboo_Release_Notes")
+ISSUE_TYPE = (optional_env("bamboo_Release_Notes_Issue_Type") || "").split(/,\s?/).map(&:downcase)
+ISSUE_STATUS = (optional_env("bamboo_Release_Notes_Issue_Status") || "").split(/,\s?/).map(&:downcase)
+MODE = (optional_env("bamboo_Release_Notes_Mode") || "sprint").downcase
+ISSUE_INFO = (optional_env("bamboo_Release_Notes_Issue_Info") || "type, status, build").split(/,\s?/).map(&:downcase)
+FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
+
+# Restrictions for API calls.
+MAX_BUILDS = 100
+MAX_ISSUES = 100
+
+##################
+### Generation ###
+##################
+
+# Delete the old release notes file.
+File.delete(FILE) if File.exists?(FILE)
+
+# Set up Bamboo and JIRA APIs.
+bamboo = API.new(BAMBOO_SERVER, BAMBOO_USER, BAMBOO_PASSWORD)
+jira = API.new(JIRA_SERVER, JIRA_USER, JIRA_PASSWORD)
+
+# Fetch data of both build plan and current build from Bamboo, because build plan doesn't contain current build yet.
+build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&max-result=#{MAX_BUILDS}")
+current_build = bamboo.get("result/#{BUILD_PLAN}-#{BUILD_NUMBER}?expand=jiraIssues")
+all_builds = [current_build] + build_plan["results"]["result"]
 
 # If issue filters are specified, construct respective query string (quoting all items).
 jql_issue_type = " AND type in (#{ISSUE_TYPE.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_TYPE.empty?
@@ -193,6 +209,10 @@ project_name = current_build["projectName"]
 current_build_number = (if BRANCH_NAME then "#{BRANCH_NAME}-" else "#" end) + BUILD_NUMBER
 current_build_url = build_url(BUILD_NUMBER)
 message = MESSAGE
+
+#################
+### Rendering ###
+#################
 
 # ERB template for release notes.
 template = <<ERB
