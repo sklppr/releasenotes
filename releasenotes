@@ -15,7 +15,7 @@ require "erb"
 API = Struct.new(:server, :user, :password) do
   def get(query)
     uri = URI.join(server, "/rest/api/latest/", query)
-    puts ">> Sending Request", uri
+    puts ">> Sending API Request", uri
     request = Net::HTTP::Get.new(uri)
     request.basic_auth(user, password)
     request["Accept"] = "application/json"
@@ -23,7 +23,7 @@ API = Struct.new(:server, :user, :password) do
     http.use_ssl = true if uri.is_a?(URI::HTTPS)
     start = Time.now
     response = http.request(request)
-    puts "<< Received Response", "Duration: #{(Time.now - start)} s", "Status: #{response.code} #{response.message}"
+    puts "Duration: #{Time.now - start} s", "Status: #{response.code} #{response.message}"
     JSON.parse(response.body)
   end
 end
@@ -153,56 +153,76 @@ build_plan = bamboo.get("result/#{BUILD_PLAN}?expand=results.result.jiraIssues&m
 current_build = bamboo.get("result/#{BUILD_PLAN}-#{BUILD_NUMBER}?expand=jiraIssues")
 all_builds = [current_build] + build_plan["results"]["result"]
 
-# If issue filters are specified, construct respective query string (quoting all items).
-jql_issue_type = " AND type in (#{ISSUE_TYPE.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_TYPE.empty?
-jql_issue_status = " AND status in (#{ISSUE_STATUS.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_STATUS.empty?
+# Generate a filtered, grouped and sorted collection of issues to display.
+sections = begin
 
-# Map issue keys to build numbers to be able to assign them to the issues later.
-issue_build_numbers = {}
-all_builds.each do |build|
-  issue_keys = build["jiraIssues"]["issue"].collect { |issue| issue["key"] }
-  issue_keys.each { |issue| issue_build_numbers[issue] = build["planResultKey"]["resultNumber"] }
-end
-
-# Fetch data of all issues from JIRA at once.
-issue_keys = issue_build_numbers.keys
-jql_query = "key in (#{issue_keys.join(",")})#{jql_issue_type}#{jql_issue_status}"
-search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
-  "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
-  "&maxResults=#{MAX_ISSUES}&validateQuery=false")
-
-# Store all issues in a hash based on their key, also assign build numbers.
-jira_issues = {}
-search_result["issues"].each do |issue_data|
-  issue = Issue.new(issue_data)
-  issue.build = issue_build_numbers[issue.key]
-  jira_issues[issue.key] = issue
-end
-
-# Create relationships according to parent field and blocker keys.
-# Only create relationships with issues that exist here and only within the same sprint.
-jira_issues.each do |key, issue|
-  # If issue has a parent issue, add this issue to its parent's children.
-  if issue.parent && (parent = jira_issues[issue.parent]) && (parent.sprint == issue.sprint)
-    parent.children << issue
-    issue.is_child = true
+  # Map issue keys to build numbers to be able to assign them to the issues later.
+  issues_with_build_numbers = {}
+  all_builds.each do |build|
+    issue_keys_of_build = build["jiraIssues"]["issue"].collect { |issue| issue["key"] }
+    issue_keys_of_build.each { |issue| issues_with_build_numbers[issue] = build["planResultKey"]["resultNumber"] }
   end
-  # If issue has blockers, add blockers to this issues children.
-  issue.blocker_keys.each do |blocker_key|
-    if (blocker = jira_issues[blocker_key]) && (blocker.sprint == issue.sprint)
-      issue.children << blocker
-      blocker.is_child = true
+  
+  # Return empty collection if Bamboo returned no issues.
+  if issues_with_build_numbers.empty?
+    puts ">> No issues found in Bamboo build plan."
+    {}
+  else
+    
+    # Construct JQL query, include filters if applicable, then fetch data of all issues from JIRA at once.
+    jql_issue_type = " AND type in (#{ISSUE_TYPE.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_TYPE.empty?
+    jql_issue_status = " AND status in (#{ISSUE_STATUS.map{ |type| %Q("#{type}") }.join(",")})" unless ISSUE_STATUS.empty?
+    jql_query = "key in (#{issues_with_build_numbers.keys.join(",")})#{jql_issue_type}#{jql_issue_status}"
+    search_result = jira.get("search?jql=#{URI.encode(jql_query)}" +
+      "&fields=summary,issuetype,status,parent,issuelinks,#{SPRINT_FIELD}" +
+      "&maxResults=#{MAX_ISSUES}&validateQuery=false")
+    
+    # Return empty collection if JIRA returned no issues.
+    if search_result["issues"].empty?
+      puts ">> No issues found in JIRA project."
+      {}
+    else
+      
+      # Store all issues in a hash based on their key, also assign build numbers.
+      jira_issues = {}
+      search_result["issues"].each do |issue_data|
+        issue = Issue.new(issue_data)
+        issue.build = issues_with_build_numbers[issue.key]
+        jira_issues[issue.key] = issue
+      end
+      
+      # Create relationships according to parent field and blocker keys.
+      # Only create relationships with issues that exist here and only within the same sprint.
+      jira_issues.each do |key, issue|
+        # If issue has a parent issue, add this issue to its parent's children.
+        if issue.parent && (parent = jira_issues[issue.parent]) && (parent.sprint == issue.sprint)
+          parent.children << issue
+          issue.is_child = true
+        end
+        # If issue has blockers, add blockers to this issues children.
+        issue.blocker_keys.each do |blocker_key|
+          if (blocker = jira_issues[blocker_key]) && (blocker.sprint == issue.sprint)
+            issue.children << blocker
+            blocker.is_child = true
+          end
+        end
+      end
+      
+      # Remove child issues from top-level, then group according to display mode, in reverse alphabetical order.
+      display_issues = jira_issues.values.reject(&:is_child)
+      groups = case MODE
+        when "sprint" then display_issues.group_by(&:sprint)
+        when "build" then display_issues.group_by { |issue| "Build ##{issue.build}" }
+      end
+      
+      # Return grouped and sorted issues.
+      Hash[groups.sort.reverse]
+
     end
-  end
-end
 
-# Remove child issues from top-level, then group according to display mode, in reverse alphabetical order.
-display_issues = jira_issues.values.reject(&:is_child)
-groups = case MODE
-  when "sprint" then display_issues.group_by(&:sprint)
-  when "build" then display_issues.group_by { |issue| "Build ##{issue.build}" }
+  end
+
 end
-sections = Hash[groups.sort.reverse]
 
 # Gather remaining data to display.
 project_name = current_build["projectName"]
