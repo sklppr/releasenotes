@@ -10,7 +10,8 @@ Additionally, you can:
 
 - add your own message,
 - include the branch name,
-- filter issues by type,
+- restrict the number of issues and builds,
+- filter issues by type or status,
 - change how issues are grouped,
 - change how issues are displayed and
 - change the release notes file name.
@@ -112,6 +113,14 @@ You can include the name of the current branch in your release notes by adding a
 - Git: `bamboo_Branch_Name="${bamboo.repository.git.branch}"`
 - Mercurial: `bamboo_Branch_Name="${bamboo.repository.hg.branch}"`
 - Subversion: `bamboo_Branch_Name="${bamboo.repository.svn.branch}"`
+
+### Restricting the number of issues and builds
+
+For API requests, both to Bamboo and JIRA, a maximum of 1000 results is requested instead of the default values.  
+You can override this number using the following variables:
+
+- `bamboo_Max_Builds` – maximum number of builds requested from Bamboo (default: 1000)
+- `bamboo_Max_Issues` – maximum number of issues requested from JIRA (default: 1000)
 
 ### Filtering issues by type or status
 
