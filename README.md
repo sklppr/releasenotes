@@ -152,6 +152,8 @@ Available pieces of information are:
 - `status` – issue status (e.g. Closed, In Progress)
 - `build` – number of the last build this issue was associated with
 
+**Important:** If your variable is empty, it will be ignored and all information is displayed. To display no additional information at all, just specify something that’s not a valid value, e.g. `none` or `disabled`.
+
 ### Changing the file name
 
 You can change the name of the release notes file by providing a variable called `bamboo_Release_Notes_File`. The default file name is `releasenotes.md`.
