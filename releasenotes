@@ -134,8 +134,8 @@ ISSUE_INFO = (optional_env("bamboo_Release_Notes_Issue_Info") || "type, status, 
 FILE = optional_env("bamboo_Release_Notes_File") || "releasenotes.md"
 
 # Restrictions for API calls.
-MAX_BUILDS = 100
-MAX_ISSUES = 100
+MAX_BUILDS = (optional_env("bamboo_Max_Builds") || 1000).to_i
+MAX_ISSUES = (optional_env("bamboo_Max_Issues") || 1000).to_i
 
 ##################
 ### Generation ###
