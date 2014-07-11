@@ -1,4 +1,4 @@
-# Bamboo Release Notes Generator
+# Release Notes Generator
 
 ## Why?
 
