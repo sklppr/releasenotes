@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Get branch name.
+branch=$(git symbolic-ref --short HEAD)
+
+# Check if branch is associated with an issue.
+if [[ $branch =~ ^.+\/([^-]+-[^-]+).*$ ]]; then
+
+  # Get issue.
+  issue="${BASH_REMATCH[1]}"
+  
+  # Get commit message.
+  commit_message=$(cat $1)
+  
+  # Check if commit message starts with issue.
+  if [[ ! $commit_message =~ ^\[$issue\] ]]; then
+
+    # If not, prepend issue to commit message.
+    echo "[$issue] $commit_message" > $1
+
+  fi
+
+fi
